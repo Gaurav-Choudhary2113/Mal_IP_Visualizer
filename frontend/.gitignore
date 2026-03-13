@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.vite/
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Common local outputs
+coverage/

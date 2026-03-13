@@ -1,0 +1,13 @@
+node_modules/
+
+# Local secrets
+.env
+.env.*
+!.env.example
+
+# Generated AbuseIPDB snapshots
+data/malicious_ips.json
+data/malicious_ips_history.json
+
+# Common local outputs
+coverage/

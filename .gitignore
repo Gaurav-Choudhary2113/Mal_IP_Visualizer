@@ -1,0 +1,8 @@
+# Package manager cache
+.pnpm-store/
+
+# OS / editor clutter
+.DS_Store
+Thumbs.db
+.vscode/
+*.log
