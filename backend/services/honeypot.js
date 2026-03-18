@@ -9,9 +9,15 @@ const RELEVANT_EVENT_IDS = new Set([
   "cowrie.login.success",
   "cowrie.command.input"
 ]);
+const DEFAULT_RECENT_ATTACK_LIMIT = 40;
+const MAX_RECENT_ATTACK_LIMIT = 200;
+const DEFAULT_MAP_WINDOW_MINUTES = 120;
+const MAX_MAP_WINDOW_ATTACKS = 2000;
+const honeypotStartedAt = new Date();
 
 const honeypotEventBus = new EventEmitter();
 honeypotEventBus.setMaxListeners(0);
+let totalAttacksSinceStartup = 0;
 
 function parseNumber(value, fallback = null) {
   const parsed = Number(value);
@@ -30,6 +36,21 @@ function trimString(value) {
 function parseTimestamp(value) {
   const date = new Date(value ?? Date.now());
   return Number.isNaN(date.getTime()) ? new Date() : date;
+}
+
+function resolveRecentAttackLimit(value) {
+  return Math.max(
+    1,
+    Math.min(MAX_RECENT_ATTACK_LIMIT, Number.parseInt(value ?? `${DEFAULT_RECENT_ATTACK_LIMIT}`, 10) || DEFAULT_RECENT_ATTACK_LIMIT)
+  );
+}
+
+function getMapWindowMinutes() {
+  return DEFAULT_MAP_WINDOW_MINUTES;
+}
+
+function getMapWindowStart() {
+  return new Date(Date.now() - getMapWindowMinutes() * 60 * 1000);
 }
 
 function getHoneypotTarget() {
@@ -185,8 +206,12 @@ export async function ingestCowrieEvents(rawEvents) {
     try {
       const createdAttack = await HoneypotAttack.create(normalizedEvent);
       const serializedAttack = serializeAttack(createdAttack);
+      totalAttacksSinceStartup += 1;
       createdAttacks.push(serializedAttack);
-      honeypotEventBus.emit("attack", serializedAttack);
+      honeypotEventBus.emit("attack", {
+        attack: serializedAttack,
+        totalSinceStartup: totalAttacksSinceStartup
+      });
     } catch (error) {
       if (error?.code === 11000) {
         duplicateCount += 1;
@@ -209,7 +234,7 @@ export async function ingestCowrieEvents(rawEvents) {
 export async function listRecentHoneypotAttacks(limit = 40) {
   await ensureDatabaseConnection();
 
-  const boundedLimit = Math.max(1, Math.min(200, Number.parseInt(limit ?? "40", 10) || 40));
+  const boundedLimit = resolveRecentAttackLimit(limit);
   const documents = await HoneypotAttack.find()
     .sort({ timestamp: -1, _id: -1 })
     .limit(boundedLimit)
@@ -218,9 +243,33 @@ export async function listRecentHoneypotAttacks(limit = 40) {
   return documents.map(serializeAttack);
 }
 
+export async function listMapWindowHoneypotAttacks() {
+  await ensureDatabaseConnection();
+
+  const documents = await HoneypotAttack.find({
+    timestamp: { $gte: getMapWindowStart() }
+  })
+    .sort({ timestamp: -1, _id: -1 })
+    .limit(MAX_MAP_WINDOW_ATTACKS)
+    .lean();
+
+  return documents.map(serializeAttack);
+}
+
+export async function countMapWindowHoneypotAttacks() {
+  await ensureDatabaseConnection();
+
+  return HoneypotAttack.countDocuments({
+    timestamp: { $gte: getMapWindowStart() }
+  });
+}
+
 export function getHoneypotFeedMetadata() {
   return {
     generatedAt: new Date().toISOString(),
-    target: getHoneypotTarget()
+    target: getHoneypotTarget(),
+    startedAt: honeypotStartedAt.toISOString(),
+    totalSinceStartup: totalAttacksSinceStartup,
+    mapWindowMinutes: getMapWindowMinutes()
   };
 }

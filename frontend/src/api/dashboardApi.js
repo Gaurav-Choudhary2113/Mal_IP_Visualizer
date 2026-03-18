@@ -150,29 +150,68 @@ function normalizeHoneypotAttack(attack) {
   };
 }
 
+function normalizeHoneypotTarget(target) {
+  if (!target) {
+    return null;
+  }
+
+  return {
+    label: target.label ?? "India Honeypot",
+    lat: toFiniteNumber(target.lat),
+    lng: toFiniteNumber(target.lng),
+    country: target.country ?? "India",
+    countryCode: target.countryCode ?? "IN"
+  };
+}
+
+function normalizeHoneypotMetadata(payload) {
+  return {
+    generatedAt: payload?.generatedAt ?? null,
+    target: normalizeHoneypotTarget(payload?.target),
+    startedAt: payload?.startedAt ?? null,
+    totalSinceStartup: toFiniteNumber(payload?.totalSinceStartup) ?? 0,
+    mapWindowMinutes: toFiniteNumber(payload?.mapWindowMinutes) ?? 120
+  };
+}
+
 function normalizeHoneypotFeed(payload) {
   const attacks = Array.isArray(payload?.attacks) ? payload.attacks : [];
+  const mapAttacks = Array.isArray(payload?.mapAttacks) ? payload.mapAttacks : [];
   const normalizedAttacks = attacks
+    .map(normalizeHoneypotAttack)
+    .sort((left, right) => Date.parse(right.timestamp ?? 0) - Date.parse(left.timestamp ?? 0));
+  const normalizedMapAttacks = mapAttacks
     .map(normalizeHoneypotAttack)
     .sort((left, right) => Date.parse(right.timestamp ?? 0) - Date.parse(left.timestamp ?? 0));
 
   const latestTarget =
     normalizedAttacks[0]?.target ??
-    (payload?.target
-      ? {
-          label: payload.target.label ?? "India Honeypot",
-          lat: toFiniteNumber(payload.target.lat),
-          lng: toFiniteNumber(payload.target.lng),
-          country: payload.target.country ?? "India",
-          countryCode: payload.target.countryCode ?? "IN"
-        }
-      : null);
+    normalizedMapAttacks[0]?.target ??
+    normalizeHoneypotTarget(payload?.target);
+
+  const metadata = normalizeHoneypotMetadata(payload);
 
   return {
-    generatedAt: payload?.generatedAt ?? null,
+    generatedAt: metadata.generatedAt,
     count: toFiniteNumber(payload?.count) ?? normalizedAttacks.length,
+    startedAt: metadata.startedAt,
+    totalSinceStartup: metadata.totalSinceStartup,
+    mapWindowMinutes: metadata.mapWindowMinutes,
+    mapAttackCount: toFiniteNumber(payload?.mapAttackCount) ?? normalizedMapAttacks.length,
     target: latestTarget,
-    attacks: normalizedAttacks
+    attacks: normalizedAttacks,
+    mapAttacks: normalizedMapAttacks
+  };
+}
+
+function normalizeHoneypotStreamAttack(payload) {
+  if (!payload?.attack) {
+    return null;
+  }
+
+  return {
+    attack: normalizeHoneypotAttack(payload.attack),
+    totalSinceStartup: toFiniteNumber(payload?.totalSinceStartup)
   };
 }
 
@@ -236,16 +275,16 @@ export function createHoneypotStream({ onReady, onAttack, onError }) {
   const eventSource = new EventSource(toApiUrl("/api/honeypot/stream"));
 
   eventSource.addEventListener("ready", (event) => {
-    onReady?.(parseJsonText(event.data));
+    onReady?.(normalizeHoneypotMetadata(parseJsonText(event.data)));
   });
 
   eventSource.addEventListener("attack", (event) => {
-    const payload = parseJsonText(event.data);
+    const payload = normalizeHoneypotStreamAttack(parseJsonText(event.data));
     if (!payload?.attack) {
       return;
     }
 
-    onAttack?.(normalizeHoneypotAttack(payload.attack));
+    onAttack?.(payload);
   });
 
   eventSource.onerror = (event) => {

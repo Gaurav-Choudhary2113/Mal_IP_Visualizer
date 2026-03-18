@@ -74,7 +74,7 @@ export default function LiveAttackFeedCard({ status, meta, style }) {
           <div className="chart-card__banner-row">
             <span className="panel-banner">{streamLabel(status.streamStatus)}</span>
             <span className="live-attack-card__count">
-              Showing {visibleAttacks.length} of {attacks.length} recent events
+              Showing {visibleAttacks.length} of {attacks.length} latest feed rows
             </span>
           </div>
           {status.error ? <span className="panel-banner panel-banner--error">{status.error}</span> : null}

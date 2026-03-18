@@ -13,6 +13,8 @@ const compactNumberFormatter = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 1
 });
 
+const fullNumberFormatter = new Intl.NumberFormat("en-US");
+
 const timestampFormatter = new Intl.DateTimeFormat("en-US", {
   dateStyle: "medium",
   timeStyle: "short"
@@ -45,6 +47,14 @@ export function formatCompactNumber(value) {
   }
 
   return compactNumberFormatter.format(value);
+}
+
+export function formatFullNumber(value) {
+  if (!Number.isFinite(value)) {
+    return "--";
+  }
+
+  return fullNumberFormatter.format(value);
 }
 
 export function formatTimestamp(value) {
@@ -89,4 +99,18 @@ export function truncateLabel(value, maxLength = 18) {
   }
 
   return `${text.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+}
+
+export function formatTimeWindowLabel(totalMinutes) {
+  const minutes = Number(totalMinutes);
+  if (!Number.isFinite(minutes) || minutes <= 0) {
+    return "Custom window";
+  }
+
+  if (minutes % 60 === 0) {
+    const hours = minutes / 60;
+    return `Last ${hours} hour${hours === 1 ? "" : "s"}`;
+  }
+
+  return `Last ${minutes} minute${minutes === 1 ? "" : "s"}`;
 }

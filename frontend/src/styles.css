@@ -129,6 +129,14 @@ select {
   background: rgba(8, 13, 22, 0.7);
 }
 
+.status-pill--accent,
+.metric-tile--primary {
+  border-color: rgba(51, 217, 255, 0.22);
+  background:
+    linear-gradient(135deg, rgba(51, 217, 255, 0.12), rgba(7, 15, 26, 0.9)),
+    rgba(8, 13, 22, 0.78);
+}
+
 .status-pill__label,
 .metric-tile__label {
   display: block;
@@ -145,6 +153,12 @@ select {
   font-family: "Consolas", "Courier New", monospace;
   font-size: 1rem;
   line-height: 1.45;
+}
+
+.status-pill__value--primary,
+.metric-tile__value--primary {
+  font-size: clamp(1.8rem, 3vw, 2.6rem);
+  line-height: 1.05;
 }
 
 .globe-card {

@@ -6,8 +6,10 @@ import countriesTopology from "world-atlas/countries-110m.json";
 import PanelState from "./PanelState";
 import {
   formatCompactNumber,
+  formatFullNumber,
   formatPreciseTimestamp,
   formatScore,
+  formatTimeWindowLabel,
   formatTimestamp
 } from "../lib/formatters";
 
@@ -15,8 +17,7 @@ const EARTH_TEXTURE_URL = "https://cdn.jsdelivr.net/npm/three-globe/example/img/
 const EARTH_BUMP_URL = "https://cdn.jsdelivr.net/npm/three-globe/example/img/earth-topology.png";
 const COUNTRY_FEATURES = feature(countriesTopology, countriesTopology.objects.countries).features;
 const MAX_RENDERED_POINTS = 6000;
-const ACTIVE_ARC_WINDOW_MS = 60 * 1000;
-const MAX_ACTIVE_ARCS = 12;
+const MAX_RENDERED_MAP_ATTACKS = 400;
 
 const HTML_ESCAPE_MAP = {
   "&": "&amp;",
@@ -28,6 +29,11 @@ const HTML_ESCAPE_MAP = {
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => HTML_ESCAPE_MAP[character]);
+}
+
+function getMapWindowMs(mapWindowMinutes) {
+  const minutes = Number(mapWindowMinutes);
+  return (Number.isFinite(minutes) && minutes > 0 ? minutes : 120) * 60 * 1000;
 }
 
 function renderPointLabel(point) {
@@ -65,7 +71,7 @@ function renderArcLabel(attack) {
 
   return `
     <div class="globe-tooltip__content">
-      <span class="globe-tooltip__eyebrow">Live honeypot event</span>
+      <span class="globe-tooltip__eyebrow">Honeypot attack</span>
       <strong>${escapeHtml(attack.source.ip)}</strong>
       <span>${escapeHtml(eventName)}</span>
       <span>${escapeHtml(sourceLocation || "Location unavailable")} -> ${escapeHtml(
@@ -92,14 +98,14 @@ function getPointRadius(point) {
 
 function getArcColor(attack) {
   if (attack.wasSuccessful === true) {
-    return ["rgba(113, 245, 200, 0.15)", "rgba(113, 245, 200, 0.95)"];
+    return ["rgba(113, 245, 200, 0.12)", "rgba(113, 245, 200, 0.95)"];
   }
 
   if (attack.eventId === "cowrie.command.input") {
-    return ["rgba(255, 191, 105, 0.14)", "rgba(255, 191, 105, 0.94)"];
+    return ["rgba(255, 191, 105, 0.12)", "rgba(255, 191, 105, 0.94)"];
   }
 
-  return ["rgba(255, 95, 119, 0.14)", "rgba(255, 95, 119, 0.96)"];
+  return ["rgba(255, 95, 119, 0.12)", "rgba(255, 95, 119, 0.96)"];
 }
 
 export default function GlobeCard({
@@ -108,7 +114,9 @@ export default function GlobeCard({
   points,
   count,
   generatedAt,
-  liveAttacks = [],
+  totalSinceStartup = 0,
+  mapAttacks = [],
+  mapWindowMinutes = 120,
   liveStatus = "connecting",
   style
 }) {
@@ -118,29 +126,32 @@ export default function GlobeCard({
   const [isRotating, setIsRotating] = useState(true);
   const [currentTime, setCurrentTime] = useState(() => Date.now());
   const isRotatingRef = useRef(true);
-  const arcData = liveAttacks
+  const mapWindowMs = getMapWindowMs(mapWindowMinutes);
+  const mapWindowLabel = formatTimeWindowLabel(mapWindowMinutes);
+  const mapWindowLabelLower = mapWindowLabel.toLowerCase();
+  const windowedMapAttacks = mapAttacks
     .filter(
       (attack) =>
         Number.isFinite(attack?.source?.lat) &&
         Number.isFinite(attack?.source?.lng) &&
         Number.isFinite(attack?.target?.lat) &&
         Number.isFinite(attack?.target?.lng) &&
-        currentTime - Date.parse(attack?.timestamp ?? 0) <= ACTIVE_ARC_WINDOW_MS
-    )
-    .slice(0, MAX_ACTIVE_ARCS)
-    .map((attack, index) => ({
-      ...attack,
-      startLat: attack.source.lat,
-      startLng: attack.source.lng,
-      endLat: attack.target.lat,
-      endLng: attack.target.lng,
-      dashInitialGap: index * 0.18
-    }));
+        currentTime - Date.parse(attack?.timestamp ?? 0) <= mapWindowMs
+    );
+  const visibleMapAttacks = windowedMapAttacks.slice(0, MAX_RENDERED_MAP_ATTACKS);
+  const arcData = visibleMapAttacks.map((attack, index) => ({
+    ...attack,
+    startLat: attack.source.lat,
+    startLng: attack.source.lng,
+    endLat: attack.target.lat,
+    endLng: attack.target.lng,
+    dashInitialGap: index * 0.08
+  }));
 
   useEffect(() => {
     const timerId = window.setInterval(() => {
       setCurrentTime(Date.now());
-    }, 5000);
+    }, 10000);
 
     return () => {
       window.clearInterval(timerId);
@@ -172,10 +183,10 @@ export default function GlobeCard({
       .arcsData([])
       .arcColor(getArcColor)
       .arcLabel(renderArcLabel)
-      .arcStroke(0.45)
+      .arcStroke(0.4)
       .arcAltitudeAutoScale(0.28)
-      .arcDashLength(0.32)
-      .arcDashGap(1.1)
+      .arcDashLength(0.22)
+      .arcDashGap(0.86)
       .arcDashInitialGap((attack) => attack.dashInitialGap ?? 0)
       .arcDashAnimateTime((attack) => (attack.wasSuccessful === true ? 1800 : 2400))
       .arcsTransitionDuration(0)
@@ -303,22 +314,30 @@ export default function GlobeCard({
           <span className="panel-kicker">AbuseIPDB geolocation feed</span>
           <h2 className="globe-card__title">Global Threat Globe</h2>
           <p className="globe-card__subtitle">
-            Red spikes mark blacklist nodes, while live arcs show Cowrie attacks converging on your
-            India honeypot.
+            Red spikes mark blacklist nodes, while the globe now keeps the {mapWindowLabelLower} of
+            Cowrie attacks in view and continues to layer new events on top in real time.
           </p>
         </div>
         <div className="globe-card__metrics">
+          <div className="metric-tile metric-tile--primary">
+            <span className="metric-tile__label">Attacks since backend start</span>
+            <strong className="metric-tile__value metric-tile__value--primary">
+              {formatFullNumber(totalSinceStartup)}
+            </strong>
+          </div>
           <div className="metric-tile">
             <span className="metric-tile__label">Threat nodes</span>
             <strong className="metric-tile__value">{formatCompactNumber(count)}</strong>
           </div>
           <div className="metric-tile">
-            <span className="metric-tile__label">Snapshot generated</span>
-            <strong className="metric-tile__value">{formatTimestamp(generatedAt)}</strong>
+            <span className="metric-tile__label">{mapWindowLabel}</span>
+            <strong className="metric-tile__value">
+              {formatCompactNumber(windowedMapAttacks.length)}
+            </strong>
           </div>
           <div className="metric-tile">
-            <span className="metric-tile__label">Live attack arcs</span>
-            <strong className="metric-tile__value">{formatCompactNumber(arcData.length)}</strong>
+            <span className="metric-tile__label">Snapshot generated</span>
+            <strong className="metric-tile__value">{formatTimestamp(generatedAt)}</strong>
           </div>
         </div>
       </header>
@@ -341,7 +360,7 @@ export default function GlobeCard({
           <span className="legend-dot" />
           <span>Red nodes indicate malicious IP coordinates.</span>
           <span className="legend-divider" />
-          <span>Animated arcs trace live Cowrie hits into India.</span>
+          <span>Animated arcs trace honeypot hits from {mapWindowLabelLower} into India.</span>
         </div>
 
         <button

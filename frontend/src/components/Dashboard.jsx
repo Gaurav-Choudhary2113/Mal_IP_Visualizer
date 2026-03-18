@@ -20,7 +20,10 @@ import {
 import {
   formatAxisPercentage,
   formatCompactNumber,
+  formatFullNumber,
   formatPercentage,
+  formatPreciseTimestamp,
+  formatTimeWindowLabel,
   truncateLabel
 } from "../lib/formatters";
 import ChartCard from "./ChartCard";
@@ -29,6 +32,8 @@ import LiveAttackFeedCard from "./LiveAttackFeedCard";
 
 const RADAR_DATE_RANGE = "1d";
 const RADAR_RANGE_LABEL = "Last 24 hours";
+const HONEYPOT_FEED_LIMIT = 40;
+const DEFAULT_HONEYPOT_MAP_WINDOW_MINUTES = 120;
 
 const ORIGIN_COLORS = [
   "#ff5f77",
@@ -73,6 +78,70 @@ function createSectionState(data = []) {
   };
 }
 
+function createHoneypotFeedData() {
+  return {
+    generatedAt: null,
+    count: 0,
+    target: null,
+    startedAt: null,
+    totalSinceStartup: 0,
+    mapWindowMinutes: DEFAULT_HONEYPOT_MAP_WINDOW_MINUTES,
+    mapAttackCount: 0,
+    attacks: [],
+    mapAttacks: []
+  };
+}
+
+function sortAttacksByTimestamp(left, right) {
+  return Date.parse(right?.timestamp ?? 0) - Date.parse(left?.timestamp ?? 0);
+}
+
+function mergeAttacksById(
+  incomingAttacks,
+  existingAttacks,
+  { limit = Number.POSITIVE_INFINITY, maxAgeMinutes } = {}
+) {
+  const mergedById = new Map();
+
+  for (const attack of incomingAttacks) {
+    if (attack?.id) {
+      mergedById.set(attack.id, attack);
+    }
+  }
+
+  for (const attack of existingAttacks) {
+    if (attack?.id && !mergedById.has(attack.id)) {
+      mergedById.set(attack.id, attack);
+    }
+  }
+
+  let mergedAttacks = Array.from(mergedById.values()).sort(sortAttacksByTimestamp);
+
+  if (Number.isFinite(maxAgeMinutes)) {
+    const cutoff = Date.now() - maxAgeMinutes * 60 * 1000;
+    mergedAttacks = mergedAttacks.filter((attack) => Date.parse(attack?.timestamp ?? 0) >= cutoff);
+  }
+
+  if (Number.isFinite(limit)) {
+    mergedAttacks = mergedAttacks.slice(0, limit);
+  }
+
+  return mergedAttacks;
+}
+
+function streamStatusLabel(status) {
+  switch (status) {
+    case "live":
+      return "Live stream connected";
+    case "polling":
+      return "Polling fallback active";
+    case "reconnecting":
+      return "Stream reconnecting";
+    default:
+      return "Connecting to stream";
+  }
+}
+
 function CustomChartTooltip({ active, payload }) {
   if (!active || !payload?.length) {
     return null;
@@ -92,12 +161,7 @@ function CustomChartTooltip({ active, payload }) {
 
 export default function Dashboard() {
   const [honeypotFeed, setHoneypotFeed] = useState({
-    data: {
-      generatedAt: null,
-      count: 0,
-      target: null,
-      attacks: []
-    },
+    data: createHoneypotFeedData(),
     loading: true,
     error: null,
     streamStatus: "connecting"
@@ -161,32 +225,38 @@ export default function Dashboard() {
     let eventSource = null;
     let pollingTimer = null;
 
-    const mergeIncomingAttacks = (incomingAttacks, nextTarget = null) => {
+    const mergeIncomingAttack = ({ attack, totalSinceStartup = null }) => {
+      if (!attack?.id) {
+        return;
+      }
+
       setHoneypotFeed((current) => {
-        const mergedById = new Map();
-
-        for (const attack of incomingAttacks) {
-          if (attack?.id) {
-            mergedById.set(attack.id, attack);
-          }
-        }
-
-        for (const attack of current.data.attacks) {
-          if (attack?.id && !mergedById.has(attack.id)) {
-            mergedById.set(attack.id, attack);
-          }
-        }
-
-        const attacks = Array.from(mergedById.values())
-          .sort((left, right) => Date.parse(right.timestamp ?? 0) - Date.parse(left.timestamp ?? 0))
-          .slice(0, 40);
+        const alreadyKnown =
+          current.data.attacks.some((existingAttack) => existingAttack.id === attack.id) ||
+          current.data.mapAttacks.some((existingAttack) => existingAttack.id === attack.id);
+        const mapWindowMinutes =
+          current.data.mapWindowMinutes ?? DEFAULT_HONEYPOT_MAP_WINDOW_MINUTES;
+        const attacks = mergeAttacksById([attack], current.data.attacks, {
+          limit: HONEYPOT_FEED_LIMIT
+        });
+        const mapAttacks = mergeAttacksById([attack], current.data.mapAttacks, {
+          maxAgeMinutes: mapWindowMinutes
+        });
+        const isWithinMapWindow =
+          Date.parse(attack.timestamp ?? 0) >= Date.now() - mapWindowMinutes * 60 * 1000;
 
         return {
           data: {
+            ...current.data,
             generatedAt: new Date().toISOString(),
             count: attacks.length,
-            target: nextTarget ?? attacks[0]?.target ?? current.data.target ?? null,
-            attacks
+            totalSinceStartup:
+              totalSinceStartup ?? current.data.totalSinceStartup + (alreadyKnown ? 0 : 1),
+            mapAttackCount:
+              current.data.mapAttackCount + (alreadyKnown || !isWithinMapWindow ? 0 : 1),
+            target: attack.target ?? current.data.target ?? null,
+            attacks,
+            mapAttacks
           },
           loading: false,
           error: null,
@@ -197,7 +267,9 @@ export default function Dashboard() {
 
     const loadRecentAttacks = async ({ preserveStreamStatus = true } = {}) => {
       try {
-        const data = await getHoneypotAttacks(40, { signal: abortController.signal });
+        const data = await getHoneypotAttacks(HONEYPOT_FEED_LIMIT, {
+          signal: abortController.signal
+        });
         if (!isActive) {
           return;
         }
@@ -267,17 +339,20 @@ export default function Dashboard() {
             data: {
               ...current.data,
               target: payload?.target ?? current.data.target,
-              generatedAt: payload?.generatedAt ?? current.data.generatedAt
+              generatedAt: payload?.generatedAt ?? current.data.generatedAt,
+              startedAt: payload?.startedAt ?? current.data.startedAt,
+              totalSinceStartup: payload?.totalSinceStartup ?? current.data.totalSinceStartup,
+              mapWindowMinutes: payload?.mapWindowMinutes ?? current.data.mapWindowMinutes
             },
             streamStatus: "live"
           }));
         },
-        onAttack: (attack) => {
+        onAttack: (payload) => {
           if (!isActive) {
             return;
           }
 
-          mergeIncomingAttacks([attack], attack.target);
+          mergeIncomingAttack(payload);
           setHoneypotFeed((current) => ({
             ...current,
             streamStatus: "live"
@@ -348,7 +423,6 @@ export default function Dashboard() {
         getRadarSummary("INDUSTRY", RADAR_DATE_RANGE, { signal: abortController.signal })
       ]
     ];
-  
 
     Promise.allSettled(requests.map(([, promise]) => promise)).then((results) => {
       if (!isActive) {
@@ -415,7 +489,32 @@ export default function Dashboard() {
               Cowrie hits flowing into your India honeypot.
             </p>
           </div>
-         
+          <div className="dashboard__status-strip">
+            <div className="status-pill status-pill--accent">
+              <span className="status-pill__label">Attacks since backend start</span>
+              <strong className="status-pill__value status-pill__value--primary">
+                {formatFullNumber(honeypotFeed.data.totalSinceStartup)}
+              </strong>
+            </div>
+            <div className="status-pill">
+              <span className="status-pill__label">Backend started</span>
+              <strong className="status-pill__value">
+                {formatPreciseTimestamp(honeypotFeed.data.startedAt)}
+              </strong>
+            </div>
+            <div className="status-pill">
+              <span className="status-pill__label">Globe window</span>
+              <strong className="status-pill__value">
+                {formatTimeWindowLabel(honeypotFeed.data.mapWindowMinutes)}
+              </strong>
+            </div>
+            <div className="status-pill">
+              <span className="status-pill__label">Feed status</span>
+              <strong className="status-pill__value">
+                {streamStatusLabel(honeypotFeed.streamStatus)}
+              </strong>
+            </div>
+          </div>
         </header>
 
         <GlobeCard
@@ -425,7 +524,9 @@ export default function Dashboard() {
           points={maliciousSnapshot.ips}
           count={maliciousSnapshot.count}
           generatedAt={maliciousSnapshot.generatedAt}
-          liveAttacks={honeypotFeed.data.attacks}
+          totalSinceStartup={honeypotFeed.data.totalSinceStartup}
+          mapAttacks={honeypotFeed.data.mapAttacks}
+          mapWindowMinutes={honeypotFeed.data.mapWindowMinutes}
           liveStatus={honeypotFeed.streamStatus}
         />
 
@@ -436,8 +537,8 @@ export default function Dashboard() {
             honeypotFeed.data.target?.label
               ? `${honeypotFeed.data.target.label} | ${formatCompactNumber(
                   honeypotFeed.data.count
-                )} recent events`
-              : `${formatCompactNumber(honeypotFeed.data.count)} recent events`
+                )} latest feed rows`
+              : `${formatCompactNumber(honeypotFeed.data.count)} latest feed rows`
           }
         />
 
@@ -498,7 +599,7 @@ export default function Dashboard() {
             title="Attack Targets"
             subtitle="Countries receiving the largest share of layer 7 attack traffic."
             status={radarFeeds.targets}
-            meta={`${RANGE_LABELS[dateRange]} | Top 8`}
+            meta={`${RADAR_RANGE_LABEL} | Top 8`}
             accent="cyan"
             style={{ "--delay": "280ms" }}
           >
@@ -550,7 +651,7 @@ export default function Dashboard() {
             title="HTTP Methods"
             subtitle="Method distribution associated with attack traffic across the selected range."
             status={radarFeeds.methods}
-            meta={RANGE_LABELS[dateRange]}
+            meta={RADAR_RANGE_LABEL}
             accent="amber"
             style={{ "--delay": "340ms" }}
           >

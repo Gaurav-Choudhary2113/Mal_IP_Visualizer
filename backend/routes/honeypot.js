@@ -3,8 +3,10 @@ import { Router } from "express";
 import rateLimit from "express-rate-limit";
 import { isDatabaseConfigured } from "../services/database.js";
 import {
+  countMapWindowHoneypotAttacks,
   getHoneypotFeedMetadata,
   ingestCowrieEvents,
+  listMapWindowHoneypotAttacks,
   listRecentHoneypotAttacks,
   subscribeToHoneypotAttacks
 } from "../services/honeypot.js";
@@ -89,11 +91,18 @@ router.get("/api/honeypot/attacks", async (req, res) => {
       return res.status(503).json({ error: "MONGODB_URI is not configured on the backend." });
     }
 
-    const attacks = await listRecentHoneypotAttacks(req.query.limit);
+    const [attacks, mapAttacks, mapAttackCount] = await Promise.all([
+      listRecentHoneypotAttacks(req.query.limit),
+      listMapWindowHoneypotAttacks(),
+      countMapWindowHoneypotAttacks()
+    ]);
+
     return res.json({
       ...getHoneypotFeedMetadata(),
       count: attacks.length,
-      attacks
+      mapAttackCount,
+      attacks,
+      mapAttacks
     });
   } catch (error) {
     console.error("[Honeypot] Failed to list attacks:", error);
@@ -114,8 +123,8 @@ router.get("/api/honeypot/stream", (req, res) => {
 
   writeEvent("ready", getHoneypotFeedMetadata());
 
-  const unsubscribe = subscribeToHoneypotAttacks((attack) => {
-    writeEvent("attack", { attack });
+  const unsubscribe = subscribeToHoneypotAttacks((payload) => {
+    writeEvent("attack", payload);
   });
 
   const heartbeat = setInterval(() => {
