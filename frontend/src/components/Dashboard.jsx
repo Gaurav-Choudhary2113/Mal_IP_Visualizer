@@ -115,7 +115,7 @@ export default function Dashboard() {
       error: null
     }));
 
-    getMaliciousIps(dateRange, { signal: abortController.signal })
+    getMaliciousIps({ signal: abortController.signal })
       .then((data) => {
         if (!isActive) {
           return;
@@ -231,34 +231,9 @@ export default function Dashboard() {
             </p>
           </div>
 
-          <div className="dashboard__controls">
-            <span className="dashboard__control-label">Radar range</span>
-            <DateRangeToggle value={dateRange} onChange={setDateRange} />
-          </div>
         </header>
 
-        <section className="panel dashboard__status-strip" style={{ "--delay": "80ms" }}>
-          <div className="status-pill">
-            <span className="status-pill__label">Blacklist nodes</span>
-            <strong className="status-pill__value">
-              {formatCompactNumber(maliciousSnapshot.count)}
-            </strong>
-          </div>
-          <div className="status-pill">
-            <span className="status-pill__label">Snapshot</span>
-            <strong className="status-pill__value">
-              {formatTimestamp(maliciousSnapshot.generatedAt)}
-            </strong>
-          </div>
-          <div className="status-pill">
-            <span className="status-pill__label">Radar window</span>
-            <strong className="status-pill__value">{RANGE_LABELS[dateRange]}</strong>
-          </div>
-          <div className="status-pill">
-            <span className="status-pill__label">Chart feeds online</span>
-            <strong className="status-pill__value">{onlineFeedCount}/4</strong>
-          </div>
-        </section>
+        
 
         <GlobeCard
           style={{ "--delay": "140ms" }}

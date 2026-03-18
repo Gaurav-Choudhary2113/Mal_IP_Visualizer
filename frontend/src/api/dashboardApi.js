@@ -74,9 +74,6 @@ function normalizeMaliciousIps(payload) {
 
   return {
     generatedAt: payload?.generatedAt ?? null,
-    historyStartAt: payload?.historyStartAt ?? null,
-    dateRange: payload?.dateRange ?? null,
-    snapshotsCovered: toFiniteNumber(payload?.snapshotsCovered) ?? null,
     count: toFiniteNumber(payload?.count) ?? normalizedIps.length,
     ips: normalizedIps
   };
@@ -124,9 +121,8 @@ function normalizeSummaryRows(payload) {
     .sort((left, right) => right.value - left.value);
 }
 
-export async function getMaliciousIps(dateRange, options = {}) {
-  const query = dateRange ? `?dateRange=${dateRange}` : "";
-  const payload = await requestJson(`/api/malicious-ips${query}`, options);
+export async function getMaliciousIps(options = {}) {
+  const payload = await requestJson("/api/malicious-ips", options);
   return normalizeMaliciousIps(payload);
 }
 

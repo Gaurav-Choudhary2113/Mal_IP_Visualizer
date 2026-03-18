@@ -14,6 +14,7 @@ import {
 const EARTH_TEXTURE_URL = "https://cdn.jsdelivr.net/npm/three-globe/example/img/earth-night.jpg";
 const EARTH_BUMP_URL = "https://cdn.jsdelivr.net/npm/three-globe/example/img/earth-topology.png";
 const COUNTRY_FEATURES = feature(countriesTopology, countriesTopology.objects.countries).features;
+const MAX_RENDERED_POINTS = 6000;
 
 const HTML_ESCAPE_MAP = {
   "&": "&amp;",
@@ -166,7 +167,7 @@ export default function GlobeCard({ loading, error, points, count, generatedAt, 
       return;
     }
 
-    globeRef.current.pointsData(points);
+    globeRef.current.pointsData(points.slice(0, MAX_RENDERED_POINTS));
   }, [points]);
 
   useEffect(() => {
@@ -226,8 +227,6 @@ export default function GlobeCard({ loading, error, points, count, generatedAt, 
         <div className="globe-card__legend">
           <span className="legend-dot" />
           <span>Red nodes indicate malicious IP coordinates.</span>
-          <span className="legend-divider" />
-          <span>Node height scales with abuse confidence.</span>
         </div>
 
         <button
