@@ -1,6 +1,20 @@
+const API_BASE_URL = String(import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/+$/, "");
+
 function toFiniteNumber(value) {
   const numericValue = Number(value);
   return Number.isFinite(numericValue) ? numericValue : null;
+}
+
+function toApiUrl(path) {
+  if (/^https?:\/\//i.test(path)) {
+    return path;
+  }
+
+  if (API_BASE_URL) {
+    return `${API_BASE_URL}${path}`;
+  }
+
+  return path;
 }
 
 function clampScore(value) {
@@ -23,7 +37,8 @@ function humanizeSummaryLabel(label) {
 }
 
 async function requestJson(path, options = {}) {
-  const response = await fetch(path, {
+  const requestUrl = toApiUrl(path);
+  const response = await fetch(requestUrl, {
     headers: {
       Accept: "application/json"
     },
@@ -37,12 +52,14 @@ async function requestJson(path, options = {}) {
     try {
       payload = JSON.parse(rawBody);
     } catch {
-      throw new Error(`Received an invalid JSON payload from ${path}.`);
+      throw new Error(`Received an invalid JSON payload from ${requestUrl}.`);
     }
   }
 
   if (!response.ok) {
-    throw new Error(payload?.error ?? `Request to ${path} failed with status ${response.status}.`);
+    throw new Error(
+      payload?.error ?? `Request to ${requestUrl} failed with status ${response.status}.`
+    );
   }
 
   return payload;

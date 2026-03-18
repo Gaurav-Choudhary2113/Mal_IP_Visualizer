@@ -3,6 +3,10 @@ const CACHE = new Map();
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 export async function fetchRadar(apiPath, query = {}) {
+  if (!process.env.CLOUDFLARE_API_TOKEN) {
+    throw new Error("CLOUDFLARE_API_TOKEN is not configured.");
+  }
+
   const url = new URL(BASE_URL + apiPath);
   for (const [k, v] of Object.entries(query)) {
     url.searchParams.set(k, v);
@@ -20,7 +24,17 @@ export async function fetchRadar(apiPath, query = {}) {
     }
   });
 
-  const data = await response.json();
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    const apiError = data?.errors?.[0]?.message ?? data?.message ?? "Request failed.";
+    throw new Error(`Cloudflare Radar request failed (${response.status}): ${apiError}`);
+  }
+
+  if (data?.success === false) {
+    const apiError = data?.errors?.[0]?.message ?? "Cloudflare Radar returned an error.";
+    throw new Error(apiError);
+  }
+
   CACHE.set(urlStr, { ts: Date.now(), data });
   return data;
 }

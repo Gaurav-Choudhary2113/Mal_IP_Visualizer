@@ -44,6 +44,10 @@ export function readLatestBlacklistSnapshot() {
 }
 
 export async function refreshBlacklist() {
+  if (!process.env.ABUSEIPDB_API_KEY) {
+    throw new Error("ABUSEIPDB_API_KEY is not configured.");
+  }
+
   const generatedAt = new Date().toISOString();
   const blacklistUrl = new URL("https://api.abuseipdb.com/api/v2/blacklist");
   blacklistUrl.searchParams.set("confidenceMinimum", String(CONFIDENCE_MINIMUM));
@@ -56,7 +60,16 @@ export async function refreshBlacklist() {
     }
   });
 
-  const data = await response.json();
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    const apiError = data?.errors?.[0]?.detail ?? data?.message ?? "Request failed.";
+    throw new Error(`AbuseIPDB request failed (${response.status}): ${apiError}`);
+  }
+
+  if (!Array.isArray(data?.data)) {
+    throw new Error("AbuseIPDB response format was unexpected.");
+  }
+
   const processed = [];
 
   for (const entry of data.data) {
