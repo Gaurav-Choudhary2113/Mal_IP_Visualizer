@@ -1,8 +1,10 @@
 import "dotenv/config";
 import express from "express";
+import honeypotRouter from "./routes/honeypot.js";
 import maliciousRouter from "./routes/malicious.js";
 import radarRouter from "./routes/radar.js";
 import { refreshBlacklist } from "./services/abuseipdb.js";
+import { connectDatabase, isDatabaseConfigured } from "./services/database.js";
 
 const app = express();
 const PORT = Number.parseInt(process.env.PORT ?? "3000", 10) || 3000;
@@ -16,13 +18,18 @@ const allowedOrigins = (process.env.CORS_ORIGIN ?? "")
   .map((origin) => origin.trim())
   .filter(Boolean);
 
+app.use(express.json({ limit: "256kb" }));
+
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (origin && (allowedOrigins.includes("*") || allowedOrigins.includes(origin))) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
-    res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
+    res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "Content-Type,Authorization,X-Ingest-Key,Cache-Control"
+    );
   }
 
   if (req.method === "OPTIONS") {
@@ -36,6 +43,7 @@ app.get("/healthz", (req, res) => {
   res.status(200).json({ ok: true, uptimeSeconds: Math.round(process.uptime()) });
 });
 
+app.use(honeypotRouter);
 app.use(maliciousRouter);
 app.use(radarRouter);
 
@@ -50,6 +58,14 @@ if (process.env.ABUSEIPDB_API_KEY) {
   refreshTimer.unref?.();
 } else {
   console.warn("[AbuseIPDB] API key missing. Blacklist refresh is disabled.");
+}
+
+if (isDatabaseConfigured()) {
+  connectDatabase().catch((error) => {
+    console.error("[MongoDB] Initial connection failed:", error);
+  });
+} else {
+  console.warn("[MongoDB] MONGODB_URI missing. Honeypot ingest routes will stay unavailable.");
 }
 
 app.listen(PORT, () => console.log(`[Server] Listening on port ${PORT}`));

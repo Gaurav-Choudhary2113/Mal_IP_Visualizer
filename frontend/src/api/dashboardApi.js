@@ -17,6 +17,18 @@ function toApiUrl(path) {
   return path;
 }
 
+function parseJsonText(text) {
+  if (!text) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
 function clampScore(value) {
   const numericValue = toFiniteNumber(value) ?? 0;
   return Math.max(0, Math.min(100, numericValue));
@@ -96,6 +108,74 @@ function normalizeMaliciousIps(payload) {
   };
 }
 
+function normalizeHoneypotAttack(attack) {
+  const sourceLat = toFiniteNumber(attack?.source?.lat);
+  const sourceLng = toFiniteNumber(attack?.source?.lng);
+  const targetLat = toFiniteNumber(attack?.target?.lat);
+  const targetLng = toFiniteNumber(attack?.target?.lng);
+
+  return {
+    id: String(attack?.id ?? `${attack?.eventId ?? "attack"}-${attack?.timestamp ?? Date.now()}`),
+    eventId: String(attack?.eventId ?? "unknown"),
+    session: attack?.session ?? null,
+    timestamp: attack?.timestamp ?? null,
+    ingestedAt: attack?.ingestedAt ?? null,
+    source: {
+      ip: String(attack?.source?.ip ?? "Unknown IP"),
+      port: toFiniteNumber(attack?.source?.port),
+      lat: sourceLat,
+      lng: sourceLng,
+      country: attack?.source?.country ?? null,
+      countryCode: attack?.source?.countryCode ?? null,
+      region: attack?.source?.region ?? null,
+      city: attack?.source?.city ?? null,
+      org: attack?.source?.org ?? null,
+      asn: attack?.source?.asn ?? null
+    },
+    target: {
+      label: attack?.target?.label ?? "India Honeypot",
+      lat: targetLat,
+      lng: targetLng,
+      country: attack?.target?.country ?? "India",
+      countryCode: attack?.target?.countryCode ?? "IN"
+    },
+    username: attack?.username ?? null,
+    password: attack?.password ?? null,
+    command: attack?.command ?? null,
+    wasSuccessful:
+      typeof attack?.wasSuccessful === "boolean" ? attack.wasSuccessful : attack?.wasSuccessful ?? null,
+    clientVersion: attack?.clientVersion ?? null,
+    hassh: attack?.hassh ?? null,
+    protocol: attack?.protocol ?? "ssh"
+  };
+}
+
+function normalizeHoneypotFeed(payload) {
+  const attacks = Array.isArray(payload?.attacks) ? payload.attacks : [];
+  const normalizedAttacks = attacks
+    .map(normalizeHoneypotAttack)
+    .sort((left, right) => Date.parse(right.timestamp ?? 0) - Date.parse(left.timestamp ?? 0));
+
+  const latestTarget =
+    normalizedAttacks[0]?.target ??
+    (payload?.target
+      ? {
+          label: payload.target.label ?? "India Honeypot",
+          lat: toFiniteNumber(payload.target.lat),
+          lng: toFiniteNumber(payload.target.lng),
+          country: payload.target.country ?? "India",
+          countryCode: payload.target.countryCode ?? "IN"
+        }
+      : null);
+
+  return {
+    generatedAt: payload?.generatedAt ?? null,
+    count: toFiniteNumber(payload?.count) ?? normalizedAttacks.length,
+    target: latestTarget,
+    attacks: normalizedAttacks
+  };
+}
+
 function normalizeCountryRows(payload) {
   const rows = Array.isArray(payload?.data) ? payload.data : [];
 
@@ -141,6 +221,38 @@ function normalizeSummaryRows(payload) {
 export async function getMaliciousIps(options = {}) {
   const payload = await requestJson("/api/malicious-ips", options);
   return normalizeMaliciousIps(payload);
+}
+
+export async function getHoneypotAttacks(limit = 40, options = {}) {
+  const payload = await requestJson(`/api/honeypot/attacks?limit=${limit}`, options);
+  return normalizeHoneypotFeed(payload);
+}
+
+export function createHoneypotStream({ onReady, onAttack, onError }) {
+  if (typeof EventSource === "undefined") {
+    return null;
+  }
+
+  const eventSource = new EventSource(toApiUrl("/api/honeypot/stream"));
+
+  eventSource.addEventListener("ready", (event) => {
+    onReady?.(parseJsonText(event.data));
+  });
+
+  eventSource.addEventListener("attack", (event) => {
+    const payload = parseJsonText(event.data);
+    if (!payload?.attack) {
+      return;
+    }
+
+    onAttack?.(normalizeHoneypotAttack(payload.attack));
+  });
+
+  eventSource.onerror = (event) => {
+    onError?.(event);
+  };
+
+  return eventSource;
 }
 
 export async function getRadarOrigins(dateRange, options = {}) {

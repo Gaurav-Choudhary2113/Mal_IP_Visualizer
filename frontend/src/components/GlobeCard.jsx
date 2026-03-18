@@ -15,6 +15,8 @@ const EARTH_TEXTURE_URL = "https://cdn.jsdelivr.net/npm/three-globe/example/img/
 const EARTH_BUMP_URL = "https://cdn.jsdelivr.net/npm/three-globe/example/img/earth-topology.png";
 const COUNTRY_FEATURES = feature(countriesTopology, countriesTopology.objects.countries).features;
 const MAX_RENDERED_POINTS = 6000;
+const ACTIVE_ARC_WINDOW_MS = 60 * 1000;
+const MAX_ACTIVE_ARCS = 12;
 
 const HTML_ESCAPE_MAP = {
   "&": "&amp;",
@@ -47,6 +49,34 @@ function renderPointLabel(point) {
   `;
 }
 
+function renderArcLabel(attack) {
+  const eventName =
+    attack.eventId === "cowrie.login.success"
+      ? "Login success"
+      : attack.eventId === "cowrie.login.failed"
+        ? "Login failed"
+        : "Command input";
+  const sourceLocation = [attack?.source?.city, attack?.source?.country].filter(Boolean).join(", ");
+  const detail = attack.command
+    ? `Command ${attack.command}`
+    : attack.username || attack.password
+      ? `Credentials ${attack.username ?? "unknown"} / ${attack.password ?? "unknown"}`
+      : "Credentials unavailable";
+
+  return `
+    <div class="globe-tooltip__content">
+      <span class="globe-tooltip__eyebrow">Live honeypot event</span>
+      <strong>${escapeHtml(attack.source.ip)}</strong>
+      <span>${escapeHtml(eventName)}</span>
+      <span>${escapeHtml(sourceLocation || "Location unavailable")} -> ${escapeHtml(
+        attack?.target?.label ?? "India Honeypot"
+      )}</span>
+      <span>${escapeHtml(detail)}</span>
+      <span>${escapeHtml(formatPreciseTimestamp(attack.timestamp))}</span>
+    </div>
+  `;
+}
+
 function getPointColor(point) {
   const alpha = Math.min(0.95, 0.34 + point.score / 135);
   return `rgba(255, 24, 24, ${alpha})`;
@@ -60,12 +90,62 @@ function getPointRadius(point) {
   return 0.025 + point.score / 2400;
 }
 
-export default function GlobeCard({ loading, error, points, count, generatedAt, style }) {
+function getArcColor(attack) {
+  if (attack.wasSuccessful === true) {
+    return ["rgba(113, 245, 200, 0.15)", "rgba(113, 245, 200, 0.95)"];
+  }
+
+  if (attack.eventId === "cowrie.command.input") {
+    return ["rgba(255, 191, 105, 0.14)", "rgba(255, 191, 105, 0.94)"];
+  }
+
+  return ["rgba(255, 95, 119, 0.14)", "rgba(255, 95, 119, 0.96)"];
+}
+
+export default function GlobeCard({
+  loading,
+  error,
+  points,
+  count,
+  generatedAt,
+  liveAttacks = [],
+  liveStatus = "connecting",
+  style
+}) {
   const globeContainerRef = useRef(null);
   const globeRef = useRef(null);
   const controlsRef = useRef(null);
   const [isRotating, setIsRotating] = useState(true);
+  const [currentTime, setCurrentTime] = useState(() => Date.now());
   const isRotatingRef = useRef(true);
+  const arcData = liveAttacks
+    .filter(
+      (attack) =>
+        Number.isFinite(attack?.source?.lat) &&
+        Number.isFinite(attack?.source?.lng) &&
+        Number.isFinite(attack?.target?.lat) &&
+        Number.isFinite(attack?.target?.lng) &&
+        currentTime - Date.parse(attack?.timestamp ?? 0) <= ACTIVE_ARC_WINDOW_MS
+    )
+    .slice(0, MAX_ACTIVE_ARCS)
+    .map((attack, index) => ({
+      ...attack,
+      startLat: attack.source.lat,
+      startLng: attack.source.lng,
+      endLat: attack.target.lat,
+      endLng: attack.target.lng,
+      dashInitialGap: index * 0.18
+    }));
+
+  useEffect(() => {
+    const timerId = window.setInterval(() => {
+      setCurrentTime(Date.now());
+    }, 5000);
+
+    return () => {
+      window.clearInterval(timerId);
+    };
+  }, []);
 
   useEffect(() => {
     if (!globeContainerRef.current || globeRef.current) {
@@ -89,6 +169,16 @@ export default function GlobeCard({ loading, error, points, count, generatedAt, 
       .pointRadius(getPointRadius)
       .pointResolution(10)
       .pointLabel(renderPointLabel)
+      .arcsData([])
+      .arcColor(getArcColor)
+      .arcLabel(renderArcLabel)
+      .arcStroke(0.45)
+      .arcAltitudeAutoScale(0.28)
+      .arcDashLength(0.32)
+      .arcDashGap(1.1)
+      .arcDashInitialGap((attack) => attack.dashInitialGap ?? 0)
+      .arcDashAnimateTime((attack) => (attack.wasSuccessful === true ? 1800 : 2400))
+      .arcsTransitionDuration(0)
       .polygonsData(COUNTRY_FEATURES)
       .polygonCapColor(() => "rgba(14, 28, 52, 0.14)")
       .polygonSideColor(() => "rgba(0, 0, 0, 0)")
@@ -171,6 +261,14 @@ export default function GlobeCard({ loading, error, points, count, generatedAt, 
   }, [points]);
 
   useEffect(() => {
+    if (!globeRef.current) {
+      return;
+    }
+
+    globeRef.current.arcsData(arcData);
+  }, [arcData]);
+
+  useEffect(() => {
     isRotatingRef.current = isRotating;
 
     const controls = controlsRef.current;
@@ -205,7 +303,8 @@ export default function GlobeCard({ loading, error, points, count, generatedAt, 
           <span className="panel-kicker">AbuseIPDB geolocation feed</span>
           <h2 className="globe-card__title">Global Threat Globe</h2>
           <p className="globe-card__subtitle">
-            Hover live blacklist nodes to inspect IP confidence and last reported activity.
+            Red spikes mark blacklist nodes, while live arcs show Cowrie attacks converging on your
+            India honeypot.
           </p>
         </div>
         <div className="globe-card__metrics">
@@ -217,6 +316,10 @@ export default function GlobeCard({ loading, error, points, count, generatedAt, 
             <span className="metric-tile__label">Snapshot generated</span>
             <strong className="metric-tile__value">{formatTimestamp(generatedAt)}</strong>
           </div>
+          <div className="metric-tile">
+            <span className="metric-tile__label">Live attack arcs</span>
+            <strong className="metric-tile__value">{formatCompactNumber(arcData.length)}</strong>
+          </div>
         </div>
       </header>
 
@@ -224,9 +327,21 @@ export default function GlobeCard({ loading, error, points, count, generatedAt, 
         <div ref={globeContainerRef} className="globe-card__canvas" />
         {overlay ? <div className="globe-card__overlay">{overlay}</div> : null}
 
+        <div className={`globe-card__live-badge globe-card__live-badge--${liveStatus}`}>
+          {liveStatus === "live"
+            ? "Live honeypot stream active"
+            : liveStatus === "polling"
+              ? "Live polling fallback"
+              : liveStatus === "reconnecting"
+                ? "Live stream reconnecting"
+                : "Connecting live stream"}
+        </div>
+
         <div className="globe-card__legend">
           <span className="legend-dot" />
           <span>Red nodes indicate malicious IP coordinates.</span>
+          <span className="legend-divider" />
+          <span>Animated arcs trace live Cowrie hits into India.</span>
         </div>
 
         <button

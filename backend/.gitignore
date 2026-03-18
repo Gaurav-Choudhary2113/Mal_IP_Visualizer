@@ -11,3 +11,4 @@ data/malicious_ips_history.json
 
 # Common local outputs
 coverage/
+scripts/

@@ -10,6 +10,8 @@ import {
   YAxis
 } from "recharts";
 import {
+  createHoneypotStream,
+  getHoneypotAttacks,
   getMaliciousIps,
   getRadarOrigins,
   getRadarSummary,
@@ -19,17 +21,14 @@ import {
   formatAxisPercentage,
   formatCompactNumber,
   formatPercentage,
-  formatTimestamp,
   truncateLabel
 } from "../lib/formatters";
 import ChartCard from "./ChartCard";
-import DateRangeToggle from "./DateRangeToggle";
 import GlobeCard from "./GlobeCard";
+import LiveAttackFeedCard from "./LiveAttackFeedCard";
 
-const RANGE_LABELS = {
-  "1d": "Last 24 hours",
-  "7d": "Last 7 days"
-};
+const RADAR_DATE_RANGE = "1d";
+const RADAR_RANGE_LABEL = "Last 24 hours";
 
 const ORIGIN_COLORS = [
   "#ff5f77",
@@ -92,7 +91,17 @@ function CustomChartTooltip({ active, payload }) {
 }
 
 export default function Dashboard() {
-  const [dateRange, setDateRange] = useState("1d");
+  const [honeypotFeed, setHoneypotFeed] = useState({
+    data: {
+      generatedAt: null,
+      count: 0,
+      target: null,
+      attacks: []
+    },
+    loading: true,
+    error: null,
+    streamStatus: "connecting"
+  });
   const [maliciousFeed, setMaliciousFeed] = useState({
     data: null,
     loading: true,
@@ -143,7 +152,178 @@ export default function Dashboard() {
       isActive = false;
       abortController.abort();
     };
-  }, [dateRange]);
+  }, []);
+
+  useEffect(() => {
+    const abortController = new AbortController();
+    let isActive = true;
+    let reconnectTimer = null;
+    let eventSource = null;
+    let pollingTimer = null;
+
+    const mergeIncomingAttacks = (incomingAttacks, nextTarget = null) => {
+      setHoneypotFeed((current) => {
+        const mergedById = new Map();
+
+        for (const attack of incomingAttacks) {
+          if (attack?.id) {
+            mergedById.set(attack.id, attack);
+          }
+        }
+
+        for (const attack of current.data.attacks) {
+          if (attack?.id && !mergedById.has(attack.id)) {
+            mergedById.set(attack.id, attack);
+          }
+        }
+
+        const attacks = Array.from(mergedById.values())
+          .sort((left, right) => Date.parse(right.timestamp ?? 0) - Date.parse(left.timestamp ?? 0))
+          .slice(0, 40);
+
+        return {
+          data: {
+            generatedAt: new Date().toISOString(),
+            count: attacks.length,
+            target: nextTarget ?? attacks[0]?.target ?? current.data.target ?? null,
+            attacks
+          },
+          loading: false,
+          error: null,
+          streamStatus: current.streamStatus
+        };
+      });
+    };
+
+    const loadRecentAttacks = async ({ preserveStreamStatus = true } = {}) => {
+      try {
+        const data = await getHoneypotAttacks(40, { signal: abortController.signal });
+        if (!isActive) {
+          return;
+        }
+
+        setHoneypotFeed((current) => ({
+          data,
+          loading: false,
+          error: null,
+          streamStatus: preserveStreamStatus ? current.streamStatus : "connecting"
+        }));
+      } catch (error) {
+        if (!isActive || error.name === "AbortError") {
+          return;
+        }
+
+        setHoneypotFeed((current) => ({
+          data: current.data,
+          loading: false,
+          error: error.message,
+          streamStatus: current.streamStatus === "live" ? "reconnecting" : current.streamStatus
+        }));
+      }
+    };
+
+    const scheduleReconnect = () => {
+      if (!isActive || reconnectTimer !== null) {
+        return;
+      }
+
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        loadRecentAttacks();
+        connectStream();
+      }, 5000);
+    };
+
+    const connectStream = () => {
+      if (!isActive) {
+        return;
+      }
+
+      if (typeof EventSource === "undefined") {
+        setHoneypotFeed((current) => ({
+          ...current,
+          streamStatus: "polling"
+        }));
+
+        pollingTimer = window.setInterval(() => {
+          loadRecentAttacks();
+        }, 15000);
+        return;
+      }
+
+      setHoneypotFeed((current) => ({
+        ...current,
+        streamStatus: current.data.attacks.length > 0 ? current.streamStatus : "connecting"
+      }));
+
+      eventSource = createHoneypotStream({
+        onReady: (payload) => {
+          if (!isActive) {
+            return;
+          }
+
+          setHoneypotFeed((current) => ({
+            ...current,
+            data: {
+              ...current.data,
+              target: payload?.target ?? current.data.target,
+              generatedAt: payload?.generatedAt ?? current.data.generatedAt
+            },
+            streamStatus: "live"
+          }));
+        },
+        onAttack: (attack) => {
+          if (!isActive) {
+            return;
+          }
+
+          mergeIncomingAttacks([attack], attack.target);
+          setHoneypotFeed((current) => ({
+            ...current,
+            streamStatus: "live"
+          }));
+        },
+        onError: () => {
+          if (!isActive) {
+            return;
+          }
+
+          eventSource?.close();
+          eventSource = null;
+          setHoneypotFeed((current) => ({
+            ...current,
+            streamStatus: "reconnecting"
+          }));
+          scheduleReconnect();
+        }
+      });
+
+      if (!eventSource) {
+        setHoneypotFeed((current) => ({
+          ...current,
+          streamStatus: "polling"
+        }));
+      }
+    };
+
+    loadRecentAttacks({ preserveStreamStatus: false }).finally(() => {
+      connectStream();
+    });
+
+    return () => {
+      isActive = false;
+      abortController.abort();
+      if (eventSource) {
+        eventSource.close();
+      }
+      if (reconnectTimer !== null) {
+        window.clearTimeout(reconnectTimer);
+      }
+      if (pollingTimer !== null) {
+        window.clearInterval(pollingTimer);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const abortController = new AbortController();
@@ -157,11 +337,18 @@ export default function Dashboard() {
     }));
 
     const requests = [
-      ["origins", getRadarOrigins(dateRange, { signal: abortController.signal })],
-      ["targets", getRadarTargets(dateRange, { signal: abortController.signal })],
-      ["methods", getRadarSummary("HTTP_METHOD", dateRange, { signal: abortController.signal })],
-      ["industries", getRadarSummary("INDUSTRY", dateRange, { signal: abortController.signal })]
+      ["origins", getRadarOrigins(RADAR_DATE_RANGE, { signal: abortController.signal })],
+      ["targets", getRadarTargets(RADAR_DATE_RANGE, { signal: abortController.signal })],
+      [
+        "methods",
+        getRadarSummary("HTTP_METHOD", RADAR_DATE_RANGE, { signal: abortController.signal })
+      ],
+      [
+        "industries",
+        getRadarSummary("INDUSTRY", RADAR_DATE_RANGE, { signal: abortController.signal })
+      ]
     ];
+  
 
     Promise.allSettled(requests.map(([, promise]) => promise)).then((results) => {
       if (!isActive) {
@@ -202,7 +389,7 @@ export default function Dashboard() {
       isActive = false;
       abortController.abort();
     };
-  }, [dateRange]);
+  }, []);
 
   const maliciousSnapshot = maliciousFeed.data ?? {
     generatedAt: null,
@@ -214,9 +401,6 @@ export default function Dashboard() {
   const targets = radarFeeds.targets.data.slice(0, 8);
   const methods = radarFeeds.methods.data;
   const industries = radarFeeds.industries.data.slice(0, 8);
-  const onlineFeedCount = [radarFeeds.origins, radarFeeds.targets, radarFeeds.methods, radarFeeds.industries]
-    .filter((feed) => feed.data.length > 0 && !feed.error)
-    .length;
 
   return (
     <main className="app-shell">
@@ -227,13 +411,12 @@ export default function Dashboard() {
             <h1 className="dashboard__title">Cyber Attack Dashboard</h1>
             <p className="dashboard__subtitle">
               Track hostile IP hotspots from AbuseIPDB alongside Cloudflare Radar attack
-              distribution across origins, targets, HTTP methods, and industries.
+              distribution across origins, targets, HTTP methods, and industries, plus live
+              Cowrie hits flowing into your India honeypot.
             </p>
           </div>
-
+         
         </header>
-
-        
 
         <GlobeCard
           style={{ "--delay": "140ms" }}
@@ -242,6 +425,20 @@ export default function Dashboard() {
           points={maliciousSnapshot.ips}
           count={maliciousSnapshot.count}
           generatedAt={maliciousSnapshot.generatedAt}
+          liveAttacks={honeypotFeed.data.attacks}
+          liveStatus={honeypotFeed.streamStatus}
+        />
+
+        <LiveAttackFeedCard
+          style={{ "--delay": "180ms" }}
+          status={honeypotFeed}
+          meta={
+            honeypotFeed.data.target?.label
+              ? `${honeypotFeed.data.target.label} | ${formatCompactNumber(
+                  honeypotFeed.data.count
+                )} recent events`
+              : `${formatCompactNumber(honeypotFeed.data.count)} recent events`
+          }
         />
 
         <section className="dashboard__grid">
@@ -249,7 +446,7 @@ export default function Dashboard() {
             title="Attack Origins"
             subtitle="Countries generating the highest share of observed L7 attack traffic."
             status={radarFeeds.origins}
-            meta={`${RANGE_LABELS[dateRange]} | Top 8`}
+            meta={`${RADAR_RANGE_LABEL} | Top 8`}
             accent="rose"
             style={{ "--delay": "220ms" }}
           >
@@ -394,7 +591,7 @@ export default function Dashboard() {
             title="Attack Industries"
             subtitle="Industry sectors receiving the highest share of attack activity."
             status={radarFeeds.industries}
-            meta={`${RANGE_LABELS[dateRange]} | Top 8`}
+            meta={`${RADAR_RANGE_LABEL} | Top 8`}
             accent="mint"
             style={{ "--delay": "400ms" }}
           >
