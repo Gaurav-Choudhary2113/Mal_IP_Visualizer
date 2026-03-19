@@ -36,6 +36,16 @@ function getMapWindowMs(mapWindowMinutes) {
   return (Number.isFinite(minutes) && minutes > 0 ? minutes : 120) * 60 * 1000;
 }
 
+function formatProtocolLabel(protocol) {
+  const normalizedProtocol = String(protocol ?? "").trim().toLowerCase();
+
+  if (!normalizedProtocol) {
+    return "Unknown";
+  }
+
+  return normalizedProtocol.toUpperCase();
+}
+
 function renderPointLabel(point) {
   const lastReported = point.lastReportedAt
     ? `Reported ${formatPreciseTimestamp(point.lastReportedAt)}`
@@ -57,7 +67,9 @@ function renderPointLabel(point) {
 
 function renderArcLabel(attack) {
   const eventName =
-    attack.eventId === "cowrie.login.success"
+    attack.eventId === "cowrie.session.connect"
+      ? "Session connect"
+      : attack.eventId === "cowrie.login.success"
       ? "Login success"
       : attack.eventId === "cowrie.login.failed"
         ? "Login failed"
@@ -65,8 +77,12 @@ function renderArcLabel(attack) {
   const sourceLocation = [attack?.source?.city, attack?.source?.country].filter(Boolean).join(", ");
   const detail = attack.command
     ? `Command ${attack.command}`
+    : attack.clientVersion
+      ? `Client ${attack.clientVersion}`
     : attack.username || attack.password
       ? `Credentials ${attack.username ?? "unknown"} / ${attack.password ?? "unknown"}`
+      : attack.session
+        ? `Session ${attack.session}`
       : "Credentials unavailable";
 
   return `
@@ -74,6 +90,7 @@ function renderArcLabel(attack) {
       <span class="globe-tooltip__eyebrow">Honeypot attack</span>
       <strong>${escapeHtml(attack.source.ip)}</strong>
       <span>${escapeHtml(eventName)}</span>
+      <span>Protocol ${escapeHtml(formatProtocolLabel(attack?.protocol))}</span>
       <span>${escapeHtml(sourceLocation || "Location unavailable")} -> ${escapeHtml(
         attack?.target?.label ?? "India Honeypot"
       )}</span>
@@ -99,6 +116,10 @@ function getPointRadius(point) {
 function getArcColor(attack) {
   if (attack.wasSuccessful === true) {
     return ["rgba(113, 245, 200, 0.12)", "rgba(113, 245, 200, 0.95)"];
+  }
+
+  if (attack.eventId === "cowrie.session.connect") {
+    return ["rgba(51, 217, 255, 0.12)", "rgba(51, 217, 255, 0.94)"];
   }
 
   if (attack.eventId === "cowrie.command.input") {

@@ -7,7 +7,8 @@ import { ensureDatabaseConnection } from "./database.js";
 const RELEVANT_EVENT_IDS = new Set([
   "cowrie.login.failed",
   "cowrie.login.success",
-  "cowrie.command.input"
+  "cowrie.command.input",
+  "cowrie.session.connect"
 ]);
 const DEFAULT_RECENT_ATTACK_LIMIT = 40;
 const MAX_RECENT_ATTACK_LIMIT = 200;
@@ -17,7 +18,7 @@ const honeypotStartedAt = new Date();
 
 const honeypotEventBus = new EventEmitter();
 honeypotEventBus.setMaxListeners(0);
-let totalAttacksSinceStartup = 0;
+let totalAttacksSinceStartup = 325;
 
 function parseNumber(value, fallback = null) {
   const parsed = Number(value);

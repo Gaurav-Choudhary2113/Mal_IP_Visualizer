@@ -439,6 +439,12 @@ select {
   background: rgba(37, 25, 8, 0.82);
 }
 
+.live-attack-table__event.is-connect {
+  color: var(--cyan);
+  border-color: rgba(51, 217, 255, 0.26);
+  background: rgba(8, 27, 40, 0.82);
+}
+
 .live-attack-card__toggle {
   justify-self: start;
   padding: 9px 13px;

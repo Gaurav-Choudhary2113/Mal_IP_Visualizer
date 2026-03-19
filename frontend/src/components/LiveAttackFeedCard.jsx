@@ -6,6 +6,8 @@ const DEFAULT_VISIBLE_ATTACKS = 5;
 
 function eventLabel(attack) {
   switch (attack?.eventId) {
+    case "cowrie.session.connect":
+      return "Session Connect";
     case "cowrie.login.success":
       return "Login Success";
     case "cowrie.login.failed":
@@ -22,11 +24,29 @@ function eventDetail(attack) {
     return attack.command;
   }
 
+  if (attack?.clientVersion) {
+    return attack.clientVersion;
+  }
+
   if (attack?.username || attack?.password) {
     return `${attack.username ?? "unknown"} / ${attack.password ?? "unknown"}`;
   }
 
+  if (attack?.session) {
+    return `Session ${attack.session}`;
+  }
+
   return attack?.source?.ip ?? "Unknown source";
+}
+
+function protocolLabel(protocol) {
+  const normalizedProtocol = String(protocol ?? "").trim().toLowerCase();
+
+  if (!normalizedProtocol) {
+    return "Unknown protocol";
+  }
+
+  return normalizedProtocol.toUpperCase();
 }
 
 function streamLabel(status) {
@@ -92,6 +112,10 @@ export default function LiveAttackFeedCard({ status, meta, style }) {
             const sourceLocation = [attack?.source?.city, attack?.source?.country]
               .filter(Boolean)
               .join(", ");
+            const sourceMeta = [
+              protocolLabel(attack?.protocol),
+              sourceLocation || "Location unavailable"
+            ].join(" | ");
 
             return (
               <div key={attack.id} className="live-attack-table__row" role="row">
@@ -100,7 +124,7 @@ export default function LiveAttackFeedCard({ status, meta, style }) {
                 </span>
                 <span className="live-attack-table__source">
                   <strong>{attack?.source?.ip ?? "Unknown IP"}</strong>
-                  <small>{sourceLocation || "Location unavailable"}</small>
+                  <small>{sourceMeta}</small>
                 </span>
                 <span
                   className={`live-attack-table__event${
@@ -108,6 +132,8 @@ export default function LiveAttackFeedCard({ status, meta, style }) {
                       ? " is-success"
                       : attack?.wasSuccessful === false
                         ? " is-failure"
+                        : attack?.eventId === "cowrie.session.connect"
+                          ? " is-connect"
                         : " is-command"
                   }`}
                 >
@@ -141,7 +167,8 @@ export default function LiveAttackFeedCard({ status, meta, style }) {
           <span className="panel-kicker">Cowrie honeypot telemetry</span>
           <h2 className="chart-card__title">Live Attack Feed</h2>
           <p className="chart-card__subtitle">
-            Real-time SSH login attempts and command activity forwarded from your honeypot.
+            Real-time Cowrie session connects, login attempts, and command activity across SSH and
+            telnet.
           </p>
         </div>
         {meta ? <span className="panel-chip">{meta}</span> : null}
