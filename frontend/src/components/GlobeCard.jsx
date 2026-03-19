@@ -333,7 +333,7 @@ export default function GlobeCard({
       <header className="globe-card__header">
         <div>
           <span className="panel-kicker">AbuseIPDB geolocation feed</span>
-          <h2 className="globe-card__title">Global Threat Globe</h2>
+          <h2 className="globe-card__title">Global Threat Locations</h2>
           <p className="globe-card__subtitle">
             Red spikes mark blacklist nodes, while the globe now keeps the {mapWindowLabelLower} of
             Cowrie attacks in view and continues to layer new events on top in real time.
